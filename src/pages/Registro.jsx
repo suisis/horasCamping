@@ -28,7 +28,7 @@ export default function Registro() {
   };
 
   // Cambia este número por el del master
-  const esMaster = formData.telefono.trim() === '635480407';
+  const esMaster = formData.telefono.trim() === '666666666';
 
   const handleSubmit = async (e) => {
     e.preventDefault();
