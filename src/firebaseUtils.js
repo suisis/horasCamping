@@ -1,17 +1,7 @@
 // src/firebaseUtils.js
 import {
-  addDoc,
-  setDoc,
-  getDoc,
-  getDocs,
-  updateDoc,
-  deleteDoc,
-  doc,
-  collection,
-  query,
-  where,
-  orderBy,
-  serverTimestamp,
+  setDoc, getDoc, getDocs, updateDoc, deleteDoc,
+  doc, collection, query, where, serverTimestamp
 } from 'firebase/firestore';
 import { db, auth } from './firebaseConfig';
 
@@ -21,21 +11,18 @@ const partidasRef = collection(db, PARTIDAS);
 // --- Helpers ---
 function requireAuth() {
   const user = auth.currentUser;
-  if (!user) throw new Error('Debes iniciar sesión.');
+  if (!user) throw new Error('No hay usuario autenticado');
   return user;
 }
 
 function buildCreador() {
   const user = auth.currentUser;
   const usuarioLS = JSON.parse(localStorage.getItem('usuarioActivo') || '{}');
-  const visible =
-    usuarioLS?.nombre && usuarioLS?.apellido
-      ? `${usuarioLS.nombre}_${usuarioLS.apellido}`.replace(/\s+/g, '_')
-      : (user?.email || 'Anonimo');
-  return visible;
+  return (usuarioLS?.nombre && usuarioLS?.apellido)
+    ? `${usuarioLS.nombre}_${usuarioLS.apellido}`.replace(/\s+/g, '_')
+    : (user?.email || 'Anonimo');
 }
 
-// =============== Crear/guardar (con ID opcional) ===============
 export const guardarPartidaFirestore = async (partida, id = null) => {
   const user = requireAuth();
 
@@ -45,38 +32,31 @@ export const guardarPartidaFirestore = async (partida, id = null) => {
 
   const payload = {
     ...partida,
-    uid: user.uid,                // 🔒 NECESARIO para pasar reglas
+    uid: user.uid,                         // 🔑 reglas
     creadoPor: creador,
-    fecha: partida?.fecha || fechaISO, // para tu UI
+    fecha: partida?.fecha || fechaISO,     // para listar
     creadoEn: serverTimestamp(),
     actualizadoEn: serverTimestamp(),
   };
 
-  // Si existe id => sobrescribe (merge) tras validar propiedad si ya existiera
   const ref = doc(db, PARTIDAS, idDocumento);
   const snap = await getDoc(ref);
   if (snap.exists() && snap.data().uid !== user.uid) {
-    throw new Error('No tienes permiso para sobrescribir esta partida.');
+    throw new Error('No tienes permiso para sobrescribir esta partida');
   }
 
   await setDoc(ref, payload, { merge: true });
   return idDocumento;
 };
 
-// =============== Listar SOLO mis partidas ===============
 export const obtenerPartidasFirestore = async () => {
   const user = requireAuth();
 
-  // Filtra por uid del usuario autenticado
-  // TIP: si Firestore te pide índice por combinar where+orderBy, elimina orderBy o crea el índice sugerido.
-  const q = query(
-    partidasRef,
-    where('uid', '==', user.uid),
-    orderBy('fecha', 'desc') // <- opcional; quítalo si te pide índice y no quieres crearlo aún
-  );
-
+  // 🔒 Solo mis partidas (sin orderBy para evitar índice)
+  const q = query(partidasRef, where('uid', '==', user.uid));
   const snap = await getDocs(q);
-  return snap.docs.map((d) => {
+
+  return snap.docs.map(d => {
     const data = d.data();
     return {
       id: d.id,
@@ -90,7 +70,6 @@ export const obtenerPartidasFirestore = async () => {
   });
 };
 
-// =============== Obtener una partida por ID (verifica propiedad) ===============
 export const obtenerPartidaPorId = async (id) => {
   const user = requireAuth();
 
@@ -99,14 +78,11 @@ export const obtenerPartidaPorId = async (id) => {
   if (!snap.exists()) throw new Error('La partida no existe');
 
   const data = snap.data();
-  if (data.uid !== user.uid) {
-    throw new Error('No tienes permiso para ver esta partida');
-  }
+  if (data.uid !== user.uid) throw new Error('No tienes permiso para ver esta partida');
 
   return { id: snap.id, ...data };
 };
 
-// =============== Actualizar (solo si es mía) ===============
 export const actualizarPartidaFirestore = async (id, nuevosDatos) => {
   const user = requireAuth();
 
@@ -115,21 +91,16 @@ export const actualizarPartidaFirestore = async (id, nuevosDatos) => {
   if (!snap.exists()) throw new Error('La partida no existe');
 
   const data = snap.data();
-  if (data.uid !== user.uid) {
-    throw new Error('No tienes permiso para editar esta partida');
-  }
+  if (data.uid !== user.uid) throw new Error('No tienes permiso para editar esta partida');
 
-  const updatePayload = {
+  await updateDoc(ref, {
     ...nuevosDatos,
     fecha: nuevosDatos?.fecha || new Date().toISOString(),
     actualizadoEn: serverTimestamp(),
-  };
-
-  await updateDoc(ref, updatePayload);
+  });
   return true;
 };
 
-// =============== Borrar (solo si es mía) ===============
 export const borrarPartidaFirestore = async (id) => {
   const user = requireAuth();
 
@@ -138,12 +109,11 @@ export const borrarPartidaFirestore = async (id) => {
   if (!snap.exists()) return;
 
   const data = snap.data();
-  if (data.uid !== user.uid) {
-    throw new Error('No tienes permiso para borrar esta partida');
-  }
+  if (data.uid !== user.uid) throw new Error('No tienes permiso para borrar esta partida');
 
   await deleteDoc(ref);
 };
+
 
 
 

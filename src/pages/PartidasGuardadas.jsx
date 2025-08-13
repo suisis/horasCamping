@@ -1,33 +1,55 @@
 import React, { useEffect, useState } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
 import Swal from 'sweetalert2';
-import { obtenerPartidasFirestore, borrarPartidaFirestore, actualizarPartidaFirestore } from '../firebaseUtils';
+import { onAuthStateChanged } from 'firebase/auth';
+import { auth } from '../firebaseConfig';
+import {
+  obtenerPartidasFirestore,
+  borrarPartidaFirestore,
+  actualizarPartidaFirestore
+} from '../firebaseUtils';
 
 export default function PartidasGuardadas() {
   const [partidas, setPartidas] = useState([]);
+  const [cargando, setCargando] = useState(true);
   const navigate = useNavigate();
   const location = useLocation();
   const desdeRondas = location.state?.desdeRondas || false;
 
   useEffect(() => {
-    const cargarPartidas = async () => {
-      const datos = await obtenerPartidasFirestore();
-      setPartidas(datos);
-    };
-    cargarPartidas();
+    const unsub = onAuthStateChanged(auth, async (user) => {
+      setCargando(true);
+      if (!user) {
+        setPartidas([]);
+        setCargando(false);
+        Swal.fire('Sesión requerida', 'Inicia sesión para ver tus partidas.', 'info');
+        return;
+      }
+      try {
+        const datos = await obtenerPartidasFirestore();
+        setPartidas(datos);
+      } catch (e) {
+        console.error('Error cargando partidas:', e);
+        Swal.fire('Error', 'No se pudieron cargar tus partidas (permisos o sesión).', 'error');
+        setPartidas([]);
+      } finally {
+        setCargando(false);
+      }
+    });
+    return () => unsub();
   }, []);
 
   const cargarPartida = (partida) => {
     // Guarda datos en localStorage
-    localStorage.setItem('rondas', JSON.stringify(partida.rondas));
-    localStorage.setItem('numEquipos', partida.equipos.toString());
-    localStorage.setItem('numPistas', partida.pistas.toString());
-    localStorage.setItem('nombresEquipos', JSON.stringify(partida.nombresEquipos));
-    localStorage.setItem('partidaId', partida.id); // ESTA LÍNEA ES FUNDAMENTAL
+    localStorage.setItem('rondas', JSON.stringify(partida.rondas || []));
+    localStorage.setItem('numEquipos', String(partida.equipos ?? 0));
+    localStorage.setItem('numPistas', String(partida.pistas ?? 0));
+    localStorage.setItem('nombresEquipos', JSON.stringify(partida.nombresEquipos || []));
+    localStorage.setItem('partidaId', partida.id); // importante
 
-    // Agrupar las rondas planas por número de ronda
-    const agrupadas = partida.rondas.reduce((acc, enf) => {
-      const idx = enf.ronda - 1;
+    // Agrupar las rondas planas por número de ronda (si vienen planas)
+    const agrupadas = (partida.rondas || []).reduce((acc, enf) => {
+      const idx = (enf.ronda ?? 1) - 1;
       if (!acc[idx]) acc[idx] = [];
       acc[idx].push(enf);
       return acc;
@@ -41,7 +63,6 @@ export default function PartidasGuardadas() {
     });
   };
 
-
   const borrarPartida = async (id) => {
     const confirm = await Swal.fire({
       title: '¿Eliminar esta partida?',
@@ -50,11 +71,15 @@ export default function PartidasGuardadas() {
       confirmButtonText: 'Sí, eliminar'
     });
 
-    if (confirm.isConfirmed) {
+    if (!confirm.isConfirmed) return;
+
+    try {
       await borrarPartidaFirestore(id);
-      const nuevas = partidas.filter((p) => p.id !== id);
-      setPartidas(nuevas);
+      setPartidas(prev => prev.filter((p) => p.id !== id));
       Swal.fire('Eliminada', 'La partida ha sido eliminada de la nube', 'success');
+    } catch (e) {
+      console.error('Error al eliminar:', e);
+      Swal.fire('Error', 'No tienes permiso para borrar esta partida.', 'error');
     }
   };
 
@@ -72,18 +97,20 @@ export default function PartidasGuardadas() {
       }
     });
 
-    if (nuevoNombre) {
+    if (!nuevoNombre) return;
+
+    try {
       await actualizarPartidaFirestore(partida.id, { nombre: nuevoNombre });
-
-      // Actualiza el nombre localmente también
-      const partidasActualizadas = partidas.map((p) =>
-        p.id === partida.id ? { ...p, nombre: nuevoNombre } : p
+      setPartidas(prev =>
+        prev.map((p) => (p.id === partida.id ? { ...p, nombre: nuevoNombre } : p))
       );
-      setPartidas(partidasActualizadas);
-
       Swal.fire('Nombre actualizado', 'La partida ha sido renombrada', 'success');
+    } catch (e) {
+      console.error('Error al renombrar:', e);
+      Swal.fire('Error', 'No tienes permiso para editar esta partida.', 'error');
     }
   };
+
   const descargarPartidaJSON = (partida) => {
     const nombreArchivo = (partida.nombre || `partida_${partida.id}`).replace(/\s+/g, '_') + '.json';
     const jsonData = JSON.stringify(partida, null, 2);
@@ -99,12 +126,20 @@ export default function PartidasGuardadas() {
     URL.revokeObjectURL(url);
   };
 
+  const formatFecha = (val) => {
+    // val puede ser ISO string o undefined
+    const d = val ? new Date(val) : new Date();
+    return isNaN(d.getTime()) ? '' : d.toLocaleString();
+    // si guardases serverTimestamp(), aquí habría que usar toDate() tras leer el snap
+  };
 
   return (
     <div className="p-4">
       <h2 className="text-3xl font-bold text-green-800 mb-6">Partidas Guardadas (en la nube)</h2>
 
-      {partidas.length === 0 ? (
+      {cargando ? (
+        <p className="text-gray-600">Cargando…</p>
+      ) : partidas.length === 0 ? (
         <p className="text-gray-600">No hay partidas guardadas en Firestore.</p>
       ) : (
         <ul className="space-y-4">
@@ -115,8 +150,10 @@ export default function PartidasGuardadas() {
                   <h3 className="text-xl font-bold text-green-700 mb-1">
                     {partida.nombre || `Partida sin nombre`}
                   </h3>
-                  <p className="text-sm text-gray-600">Fecha: {new Date(partida.fecha).toLocaleString()}</p>
-                  <p className="text-sm text-gray-600">Equipos: {partida.equipos} | Pistas: {partida.pistas}</p>
+                  <p className="text-sm text-gray-600">Fecha: {formatFecha(partida.fecha)}</p>
+                  <p className="text-sm text-gray-600">
+                    Equipos: {partida.equipos} | Pistas: {partida.pistas}
+                  </p>
                 </div>
                 <div className="space-x-2">
                   <button
@@ -168,6 +205,7 @@ export default function PartidasGuardadas() {
     </div>
   );
 }
+
 
 
 
