@@ -1,140 +1,79 @@
-// src/pages/RegisterWithEmail.jsx
-import React, { useState } from 'react';
-import { useNavigate } from 'react-router-dom';
-import Swal from 'sweetalert2';
-import { createUserWithEmailAndPassword } from 'firebase/auth';
-import { doc, setDoc, serverTimestamp } from 'firebase/firestore';
-import { auth, db } from '../firebaseConfig';
-import { Eye, EyeOff } from 'lucide-react';
+import React, { useState } from "react";
+import { createUserWithEmailAndPassword } from "firebase/auth";
+import { doc, setDoc } from "firebase/firestore";
+import { auth, db } from "../firebaseConfig";
 
 export default function RegisterWithEmail() {
-  const [nombre, setNombre] = useState('');
-  const [apellido, setApellido] = useState('');
-  const [correo, setCorreo] = useState('');
-  const [telefono, setTelefono] = useState('');
-  const [password, setPassword] = useState('');
-  const [mostrarTexto, setMostrarTexto] = useState(false);
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
   const [loading, setLoading] = useState(false);
 
-  const navigate = useNavigate();
-
-  const handleRegister = async () => {
-    if (!nombre || !apellido || !correo || !telefono || !password) {
-      Swal.fire('Error', 'Todos los campos son obligatorios.', 'error');
-      return;
-    }
-
+  const handleRegister = async (e) => {
+    e.preventDefault();
     setLoading(true);
+
     try {
-      // 1) Crear usuario en Auth
-      const userCredential = await createUserWithEmailAndPassword(auth, correo.trim(), password);
+      // 1️⃣ Crear el usuario en Firebase Authentication
+      const userCredential = await createUserWithEmailAndPassword(auth, email, password);
       const user = userCredential.user;
 
-      // 2) Crear doc en registros/{uid}
-      const ahora = new Date();
-      const exp = new Date(ahora);
-      exp.setDate(exp.getDate() + 3);
-
-      await setDoc(doc(db, 'registros', user.uid), {
-        uid: user.uid,
-        nombre,
-        apellido,
-        correo: correo.trim(),
-        telefono,
-        esMaster: false,                 // por seguridad, el master lo marca un admin
-        clave: '',                       // compatibilidad (no se usa con Auth)
-        primerAcceso: ahora.toISOString(),
-        expiracion: exp.toISOString(),   // puedes quitar expiración si no la usas ya
-        creadoEn: serverTimestamp(),
+      // 2️⃣ Guardar los datos en Firestore con rol master
+      await setDoc(doc(db, "users", user.uid), {
+        email: user.email,
+        isMaster: true, // 🚀 marcamos que es MASTER
+        createdAt: new Date()
       });
 
-      await Swal.fire({
-        icon: 'success',
-        title: 'Registro completado',
-        text: 'Ahora puedes iniciar sesión con tu correo y contraseña.',
-        confirmButtonText: 'Ir a login',
-      });
-
-      navigate('/login');
+      alert("✅ Usuario master creado correctamente");
+      setEmail("");
+      setPassword("");
     } catch (error) {
-      console.error('❌ Error en el registro:', error.code, error.message);
-      Swal.fire('Error al registrar', error.message, 'error');
+      console.error("Error al registrar:", error);
+      alert("❌ " + error.message);
     } finally {
       setLoading(false);
     }
   };
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-[#fef9f4] to-[#e0e7ff] px-4">
-      <div className="bg-white p-8 rounded-lg shadow-md w-full max-w-md text-center space-y-4">
-        <h2 className="text-2xl font-bold text-[#002c54]">Registro de usuario</h2>
-
-        <input
-          type="text"
-          placeholder="Nombre"
-          className="w-full px-4 py-2 border rounded"
-          value={nombre}
-          onChange={(e) => setNombre(e.target.value)}
-        />
-        <input
-          type="text"
-          placeholder="Apellido"
-          className="w-full px-4 py-2 border rounded"
-          value={apellido}
-          onChange={(e) => setApellido(e.target.value)}
-        />
+    <div style={{ maxWidth: "400px", margin: "0 auto" }}>
+      <h2>Registrar nuevo Master</h2>
+      <form onSubmit={handleRegister}>
         <input
           type="email"
           placeholder="Correo electrónico"
-          className="w-full px-4 py-2 border rounded"
-          value={correo}
-          onChange={(e) => setCorreo(e.target.value)}
+          value={email}
+          onChange={(e) => setEmail(e.target.value)}
+          required
+          style={{ display: "block", width: "100%", marginBottom: "10px" }}
         />
         <input
-          type="tel"
-          placeholder="Teléfono"
-          className="w-full px-4 py-2 border rounded"
-          value={telefono}
-          onChange={(e) => setTelefono(e.target.value)}
+          type="password"
+          placeholder="Contraseña"
+          value={password}
+          onChange={(e) => setPassword(e.target.value)}
+          required
+          style={{ display: "block", width: "100%", marginBottom: "10px" }}
         />
-
-        <div className="relative">
-          <input
-            type={mostrarTexto ? 'text' : 'password'}
-            placeholder="Contraseña"
-            className="w-full px-4 py-2 border rounded pr-10"
-            value={password}
-            onChange={(e) => setPassword(e.target.value)}
-          />
-          <div
-            className="absolute inset-y-0 right-3 flex items-center cursor-pointer"
-            onClick={() => setMostrarTexto(!mostrarTexto)}
-          >
-            {mostrarTexto ? <EyeOff size={20} /> : <Eye size={20} />}
-          </div>
-        </div>
-
         <button
-          onClick={handleRegister}
+          type="submit"
           disabled={loading}
-          className="w-full bg-[#002c54] text-white px-6 py-2 rounded hover:bg-[#004080] transition disabled:opacity-60"
+          style={{
+            backgroundColor: "#4CAF50",
+            color: "white",
+            padding: "10px",
+            border: "none",
+            cursor: "pointer",
+            width: "100%"
+          }}
         >
-          {loading ? 'Registrando…' : 'Registrarse'}
+          {loading ? "Registrando..." : "Registrar como Master"}
         </button>
-
-        <p className="text-sm text-gray-500">
-          ¿Ya tienes cuenta?{' '}
-          <span
-            onClick={() => navigate('/login')}
-            className="text-blue-600 hover:underline cursor-pointer"
-          >
-            Inicia sesión aquí
-          </span>
-        </p>
-      </div>
+      </form>
     </div>
   );
 }
+
 
 
 
