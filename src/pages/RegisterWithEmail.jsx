@@ -1,8 +1,9 @@
+// src/pages/RegisterWithEmail.jsx
 import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import Swal from 'sweetalert2';
 import { createUserWithEmailAndPassword } from 'firebase/auth';
-import { doc, setDoc } from 'firebase/firestore';
+import { doc, setDoc, serverTimestamp } from 'firebase/firestore';
 import { auth, db } from '../firebaseConfig';
 import { Eye, EyeOff } from 'lucide-react';
 
@@ -13,6 +14,7 @@ export default function RegisterWithEmail() {
   const [telefono, setTelefono] = useState('');
   const [password, setPassword] = useState('');
   const [mostrarTexto, setMostrarTexto] = useState(false);
+  const [loading, setLoading] = useState(false);
 
   const navigate = useNavigate();
 
@@ -22,40 +24,44 @@ export default function RegisterWithEmail() {
       return;
     }
 
+    setLoading(true);
     try {
-      // 1. Crear usuario en Firebase Auth
-      const userCredential = await createUserWithEmailAndPassword(auth, correo, password);
+      // 1) Crear usuario en Auth
+      const userCredential = await createUserWithEmailAndPassword(auth, correo.trim(), password);
       const user = userCredential.user;
 
-      // 2. Crear documento en Firestore en la colección 'registros'
+      // 2) Crear doc en registros/{uid}
       const ahora = new Date();
       const expiracion = new Date(ahora);
       expiracion.setDate(expiracion.getDate() + 3);
 
-      const userData = {
+      await setDoc(doc(db, 'registros', user.uid), {
+        uid: user.uid,
         nombre,
         apellido,
-        correo,
+        correo: correo.trim(),
         telefono,
-        clave: '',
-        creadoEn: ahora,
+        esMaster: false,
+        // Campos de tu lógica anterior
+        clave: '', // ya no se usa con Auth, lo dejo vacío por compatibilidad
+        creadoEn: serverTimestamp(),
         primerAcceso: ahora.toISOString(),
         expiracion: expiracion.toISOString(),
-        esMaster: false,
-      };
+      });
 
-      await setDoc(doc(db, 'registros', user.uid), userData);
-
-      Swal.fire({
+      await Swal.fire({
         icon: 'success',
         title: 'Registro completado',
         text: 'Ahora puedes iniciar sesión con tu correo y contraseña.',
         confirmButtonText: 'Ir a login',
-      }).then(() => navigate('/login'));
+      });
 
+      navigate('/login');
     } catch (error) {
       console.error('❌ Error en el registro:', error.code, error.message);
       Swal.fire('Error al registrar', error.message, 'error');
+    } finally {
+      setLoading(false);
     }
   };
 
@@ -111,9 +117,10 @@ export default function RegisterWithEmail() {
 
         <button
           onClick={handleRegister}
-          className="w-full bg-[#002c54] text-white px-6 py-2 rounded hover:bg-[#004080] transition"
+          disabled={loading}
+          className="w-full bg-[#002c54] text-white px-6 py-2 rounded hover:bg-[#004080] transition disabled:opacity-60"
         >
-          Registrarse
+          {loading ? 'Registrando…' : 'Registrarse'}
         </button>
 
         <p className="text-sm text-gray-500">
@@ -129,6 +136,7 @@ export default function RegisterWithEmail() {
     </div>
   );
 }
+
 
 
 

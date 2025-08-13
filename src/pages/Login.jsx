@@ -3,17 +3,18 @@ import { useNavigate } from 'react-router-dom';
 import Swal from 'sweetalert2';
 import {
   getDocs,
+  getDoc,
   query,
   collection,
   where,
   updateDoc,
-  doc,
 } from 'firebase/firestore';
 import db from '../firebaseConfig';
 
 export default function Login() {
   const [telefono, setTelefono] = useState('');
   const [clave, setClave] = useState('');
+  const [loading, setLoading] = useState(false);
   const navigate = useNavigate();
 
   const handleLogin = async () => {
@@ -22,8 +23,10 @@ export default function Login() {
       return;
     }
 
+    setLoading(true);
     try {
-      const q = query(collection(db, 'registros'), where('correo', '==', email));
+      // Buscar por TELEFONO (antes consultaba por correo con variable inexistente "email")
+      const q = query(collection(db, 'registros'), where('telefono', '==', telefono));
       const snapshot = await getDocs(q);
 
       if (snapshot.empty) {
@@ -32,8 +35,9 @@ export default function Login() {
       }
 
       const userDoc = snapshot.docs[0];
-      const data = userDoc.data();
+      let data = userDoc.data();
 
+      // Validación de clave
       if (data.clave !== clave) {
         Swal.fire('Error', 'Clave incorrecta', 'error');
         return;
@@ -42,28 +46,23 @@ export default function Login() {
       const esMaster = data.esMaster === true;
 
       if (!esMaster) {
-        let primerAcceso = data.primerAcceso;
-
-        if (!primerAcceso) {
+        // Si no tiene fecha de expiración, crearla (3 días)
+        if (!data.primerAcceso || !data.expiracion) {
           const ahora = new Date();
           const expiracion = new Date(ahora);
           expiracion.setDate(expiracion.getDate() + 3);
 
-          // Actualiza el documento
-          await updateDoc(doc(db, 'registros', userDoc.id), {
+          await updateDoc(userDoc.ref, {
             primerAcceso: ahora.toISOString(),
             expiracion: expiracion.toISOString(),
           });
 
-          // Vuelve a consultar el documento actualizado
-          const updatedSnap = await getDocs(query(collection(db, 'registros'), where('telefono', '==', telefono)));
-          const updatedData = updatedSnap.docs[0].data();
-
-          // Sobrescribe la data anterior
-          Object.assign(data, updatedData);
+          // Releer el doc actualizado
+          const updated = await getDoc(userDoc.ref);
+          data = updated.data();
         }
 
-        // Ahora data.expiracion está actualizado
+        // Comprobar caducidad
         const fechaExpiracion = new Date(data.expiracion);
         if (new Date() > fechaExpiracion) {
           Swal.fire(
@@ -73,10 +72,9 @@ export default function Login() {
           );
           return;
         }
-
       }
 
-      // Guardar usuario activo
+      // Guardar usuario activo en localStorage (tu flujo personalizado)
       localStorage.setItem(
         'usuarioActivo',
         JSON.stringify({
@@ -88,9 +86,8 @@ export default function Login() {
         })
       );
 
-      // Mensaje de bienvenida personalizado
+      // Mensaje de bienvenida
       let mensajeTiempo = '';
-
       if (!esMaster) {
         const fechaExpiracion = new Date(data.expiracion);
         const ahora = new Date();
@@ -107,7 +104,7 @@ export default function Login() {
         mensajeTiempo = `<strong>✅ Tu clave es ilimitada. Nunca perderás el acceso.</strong>`;
       }
 
-      Swal.fire({
+      await Swal.fire({
         icon: 'success',
         title: `Bienvenido, ${data.nombre}`,
         html: `
@@ -115,12 +112,14 @@ export default function Login() {
           <p>${!esMaster ? 'Después de eso, necesitarás una nueva clave.' : ''}</p>
         `,
         confirmButtonText: 'Continuar',
-      }).then(() => {
-        navigate('/configuracion');
       });
+
+      navigate('/configuracion');
     } catch (e) {
       console.error('Error al iniciar sesión:', e);
       Swal.fire('Error', 'Algo salió mal al iniciar sesión', 'error');
+    } finally {
+      setLoading(false);
     }
   };
 
@@ -147,9 +146,10 @@ export default function Login() {
         <div className="flex justify-center gap-4 mt-4">
           <button
             onClick={handleLogin}
-            className="flex-1 max-w-[160px] bg-[#002c54] text-white px-6 py-2 rounded hover:bg-[#004080] transition"
+            disabled={loading}
+            className="flex-1 max-w-[160px] bg-[#002c54] text-white px-6 py-2 rounded hover:bg-[#004080] transition disabled:opacity-60"
           >
-            Iniciar sesión
+            {loading ? 'Entrando…' : 'Iniciar sesión'}
           </button>
           <button
             onClick={() => navigate('/')}
@@ -172,6 +172,7 @@ export default function Login() {
     </div>
   );
 }
+
 
 
 

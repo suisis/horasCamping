@@ -1,127 +1,85 @@
+// src/pages/LoginWithEmail.jsx
 import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import Swal from 'sweetalert2';
 import { signInWithEmailAndPassword } from 'firebase/auth';
-import { doc, getDocs, query, collection, where } from 'firebase/firestore';
+import { doc, getDoc, query, where, collection, getDocs } from 'firebase/firestore';
 import { auth, db } from '../firebaseConfig';
 import { Eye, EyeOff } from 'lucide-react';
 
 export default function LoginWithEmail() {
   const [email, setEmail] = useState('');
-  const [clave, setClave] = useState('');
-  const [password, setPassword] = useState('');
-  const [isMaster, setIsMaster] = useState(false);
-  const [mostrarClave, setMostrarClave] = useState(false);
-  const [mostrarPassword, setMostrarPassword] = useState(false);
+  const [passwordOrClave, setPasswordOrClave] = useState('');
+  const [mostrar, setMostrar] = useState(false);
+  const [soyMaster, setSoyMaster] = useState(false);
+  const [loading, setLoading] = useState(false);
 
   const navigate = useNavigate();
 
-  const handleCorreoChange = async (e) => {
-    const value = e.target.value;
-    setEmail(value);
-
-    // Consultar Firestore para ver si el correo es master
-    const q = query(collection(db, 'registros'), where('correo', '==', value));
-    const snapshot = await getDocs(q);
-
-    if (!snapshot.empty) {
-      const data = snapshot.docs[0].data();
-      setIsMaster(data.esMaster === true);
-    } else {
-      setIsMaster(false);
-    }
-  };
-
-  const handleLogin = async () => {
-    if (!email || (isMaster ? !clave : !password)) {
+  const onSubmit = async (e) => {
+    e.preventDefault();
+    if (!email || !passwordOrClave) {
       Swal.fire('Error', 'Debes rellenar todos los campos', 'error');
       return;
     }
 
+    setLoading(true);
     try {
-      if (isMaster) {
-        // Buscar el usuario por correo
-        const userQuery = query(collection(db, 'registros'), where('correo', '==', email));
-        const userSnap = await getDocs(userQuery);
+      // 1) Autenticación con Auth (para master y no master)
+      const userCred = await signInWithEmailAndPassword(auth, email.trim(), passwordOrClave);
+      const user = userCred.user;
 
-        if (userSnap.empty) {
-          Swal.fire('Error', 'No se encontró información del usuario en Firestore', 'error');
-          return;
-        }
+      // 2) Perfil en Firestore (doc por UID)
+      let perfil;
+      const docRef = doc(db, 'registros', user.uid);
+      const snap = await getDoc(docRef);
 
-        const userDoc = userSnap.docs[0];
-        const userData = userDoc.data();
-
-        if (userData.clave !== clave) {
-          Swal.fire('Error', 'Clave incorrecta', 'error');
-          return;
-        }
-
-        // Iniciar sesión con contraseña vacía si es master (se espera que ya tenga cuenta)
-        const fakePassword = 'master_placeholder'; // Evita el bloqueo de Firebase
-        await signInWithEmailAndPassword(auth, email, fakePassword).catch(() => {});
-
-        localStorage.setItem('usuarioActivo', JSON.stringify({
-          uid: userDoc.id,
-          nombre: userData.nombre,
-          apellido: userData.apellido,
-          email: userData.correo,
-          telefono: userData.telefono,
-          master: true,
-        }));
-
-        Swal.fire({
-          icon: 'success',
-          title: `Bienvenido, ${userData.nombre}`,
-          html: '<strong>Acceso como MASTER</strong>',
-          confirmButtonText: 'Continuar'
-        }).then(() => {
-          navigate('/configuracion');
-        });
-
+      if (snap.exists()) {
+        perfil = { id: snap.id, ...snap.data() };
       } else {
-        // Usuario normal: iniciar sesión con email y password
-        const userCredential = await signInWithEmailAndPassword(auth, email, password);
-        const user = userCredential.user;
-
-        const userQuery = query(collection(db, 'registros'), where('correo', '==', email));
-        const userSnap = await getDocs(userQuery);
-
-        if (userSnap.empty) {
-          Swal.fire('Error', 'No se encontró información del usuario en Firestore', 'error');
-          return;
+        // Compatibilidad por si ya tienes docs antiguos por correo
+        const q = query(collection(db, 'registros'), where('correo', '==', email.trim()));
+        const qs = await getDocs(q);
+        if (!qs.empty) {
+          const d = qs.docs[0];
+          perfil = { id: d.id, ...d.data() };
         }
-
-        const userDoc = userSnap.docs[0];
-        const userData = userDoc.data();
-
-        localStorage.setItem('usuarioActivo', JSON.stringify({
-          uid: userDoc.id,
-          nombre: userData.nombre,
-          apellido: userData.apellido,
-          email: userData.correo,
-          telefono: userData.telefono,
-          master: false,
-        }));
-
-        Swal.fire({
-          icon: 'success',
-          title: `Bienvenido, ${userData.nombre}`,
-          confirmButtonText: 'Continuar'
-        }).then(() => {
-          navigate('/configuracion');
-        });
       }
 
+      if (!perfil) {
+        Swal.fire('Error', 'No se encontró tu perfil en Firestore.', 'error');
+        return;
+      }
+
+      // 3) Persistir sesión visible para tu app
+      localStorage.setItem('usuarioActivo', JSON.stringify({
+        uid: perfil.id,
+        nombre: perfil.nombre,
+        apellido: perfil.apellido,
+        email: perfil.correo,
+        telefono: perfil.telefono,
+        master: perfil.esMaster === true,
+      }));
+
+      await Swal.fire({
+        icon: 'success',
+        title: `Bienvenido, ${perfil.nombre || ''}`.trim(),
+        html: (perfil.esMaster ? '<strong>Acceso como MASTER</strong>' : ''),
+        confirmButtonText: 'Continuar',
+      });
+
+      navigate('/configuracion');
     } catch (error) {
       console.error('Error al iniciar sesión:', error.code, error.message);
       Swal.fire('Error al iniciar sesión', error.message, 'error');
+    } finally {
+      setLoading(false);
     }
   };
 
   return (
     <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-[#fef9f4] to-[#e0e7ff] px-4">
-      <div className="bg-white p-8 rounded-lg shadow-md w-full max-w-md text-center space-y-4">
+      <form onSubmit={onSubmit} className="bg-white p-8 rounded-lg shadow-md w-full max-w-md text-center space-y-4">
         <h2 className="text-2xl font-bold text-[#002c54]">Iniciar sesión</h2>
 
         <input
@@ -129,62 +87,51 @@ export default function LoginWithEmail() {
           placeholder="Correo electrónico"
           className="w-full px-4 py-2 border rounded"
           value={email}
-          onChange={handleCorreoChange}
+          onChange={(e) => setEmail(e.target.value)}
+          required
         />
 
-        {/* Campo CLAVE para master */}
-        {isMaster ? (
-          <div className="relative">
+        <div className="flex items-center justify-between text-sm">
+          <label className="flex items-center gap-2">
             <input
-              type={mostrarClave ? 'text' : 'password'}
-              placeholder="Clave"
-              className="w-full px-4 py-2 border rounded pr-10"
-              value={clave}
-              onChange={(e) => setClave(e.target.value)}
+              type="checkbox"
+              checked={soyMaster}
+              onChange={(e) => setSoyMaster(e.target.checked)}
             />
-            <div
-              className="absolute right-2 top-2 cursor-pointer text-gray-500"
-              onClick={() => setMostrarClave(!mostrarClave)}
-            >
-              {mostrarClave ? <EyeOff size={20} /> : <Eye size={20} />}
-            </div>
-          </div>
-        ) : (
-          // Campo CONTRASEÑA para usuarios normales
-          <div className="relative">
-            <input
-              type={mostrarPassword ? 'text' : 'password'}
-              placeholder="Contraseña"
-              className="w-full px-4 py-2 border rounded pr-10"
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-            />
-            <div
-              className="absolute right-2 top-2 cursor-pointer text-gray-500"
-              onClick={() => setMostrarPassword(!mostrarPassword)}
-            >
-              {mostrarPassword ? <EyeOff size={20} /> : <Eye size={20} />}
-            </div>
-          </div>
-        )}
-
-        <div className="flex justify-center gap-4 mt-4">
-          <button
-            onClick={handleLogin}
-            className="flex-1 max-w-[160px] bg-[#002c54] text-white px-6 py-2 rounded hover:bg-[#004080] transition"
-          >
-            Iniciar sesión
-          </button>
-          <button
-            onClick={() => navigate('/')}
-            className="flex-1 max-w-[160px] bg-gray-200 text-[#002c54] px-6 py-2 rounded hover:bg-gray-300 transition"
-          >
-            Volver
-          </button>
+            Soy master
+          </label>
+          <span className="text-gray-500">
+            {soyMaster ? 'Introduce tu Clave (password de Auth)' : 'Introduce tu Contraseña'}
+          </span>
         </div>
 
+        <div className="relative">
+          <input
+            type={mostrar ? 'text' : 'password'}
+            placeholder={soyMaster ? 'Clave (master)' : 'Contraseña'}
+            className="w-full px-4 py-2 border rounded pr-10"
+            value={passwordOrClave}
+            onChange={(e) => setPasswordOrClave(e.target.value)}
+            required
+          />
+          <div
+            className="absolute right-2 top-2 cursor-pointer text-gray-500"
+            onClick={() => setMostrar(!mostrar)}
+          >
+            {mostrar ? <EyeOff size={20} /> : <Eye size={20} />}
+          </div>
+        </div>
+
+        <button
+          type="submit"
+          disabled={loading}
+          className="w-full bg-[#002c54] text-white px-6 py-2 rounded hover:bg-[#004080] transition disabled:opacity-60"
+        >
+          {loading ? 'Entrando…' : 'Iniciar sesión'}
+        </button>
+
         <p className="text-sm text-gray-500">
-          ¿No tienes una cuenta?{' '}
+          ¿No tienes cuenta?{' '}
           <span
             onClick={() => navigate('/registro')}
             className="text-blue-600 hover:underline cursor-pointer"
@@ -192,10 +139,12 @@ export default function LoginWithEmail() {
             Regístrate aquí
           </span>
         </p>
-      </div>
+      </form>
     </div>
   );
 }
+
+
 
 
 
