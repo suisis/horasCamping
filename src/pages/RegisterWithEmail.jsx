@@ -32,8 +32,8 @@ export default function RegisterWithEmail() {
 
       // 2) Crear doc en registros/{uid}
       const ahora = new Date();
-      const expiracion = new Date(ahora);
-      expiracion.setDate(expiracion.getDate() + 3);
+      const exp = new Date(ahora);
+      exp.setDate(exp.getDate() + 3);
 
       await setDoc(doc(db, 'registros', user.uid), {
         uid: user.uid,
@@ -41,12 +41,11 @@ export default function RegisterWithEmail() {
         apellido,
         correo: correo.trim(),
         telefono,
-        esMaster: false,
-        // Campos de tu lógica anterior
-        clave: '', // ya no se usa con Auth, lo dejo vacío por compatibilidad
-        creadoEn: serverTimestamp(),
+        esMaster: false,                 // por seguridad, el master lo marca un admin
+        clave: '',                       // compatibilidad (no se usa con Auth)
         primerAcceso: ahora.toISOString(),
-        expiracion: expiracion.toISOString(),
+        expiracion: exp.toISOString(),   // puedes quitar expiración si no la usas ya
+        creadoEn: serverTimestamp(),
       });
 
       await Swal.fire({
@@ -136,6 +135,7 @@ export default function RegisterWithEmail() {
     </div>
   );
 }
+
 
 
 

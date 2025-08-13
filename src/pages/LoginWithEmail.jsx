@@ -3,75 +3,93 @@ import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import Swal from 'sweetalert2';
 import { signInWithEmailAndPassword } from 'firebase/auth';
-import { doc, getDoc, query, where, collection, getDocs } from 'firebase/firestore';
+import { doc, getDoc } from 'firebase/firestore';
 import { auth, db } from '../firebaseConfig';
-import { Eye, EyeOff } from 'lucide-react';
 
 export default function LoginWithEmail() {
-  const [email, setEmail] = useState('');
-  const [passwordOrClave, setPasswordOrClave] = useState('');
-  const [mostrar, setMostrar] = useState(false);
-  const [soyMaster, setSoyMaster] = useState(false);
+  const [correo, setCorreo] = useState('');
+  const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
-
   const navigate = useNavigate();
 
-  const onSubmit = async (e) => {
-    e.preventDefault();
-    if (!email || !passwordOrClave) {
-      Swal.fire('Error', 'Debes rellenar todos los campos', 'error');
+  const handleLogin = async () => {
+    if (!correo || !password) {
+      Swal.fire('Error', 'Debes introducir correo y contraseña.', 'error');
       return;
     }
 
     setLoading(true);
     try {
-      // 1) Autenticación con Auth (para master y no master)
-      const userCred = await signInWithEmailAndPassword(auth, email.trim(), passwordOrClave);
-      const user = userCred.user;
+      // 1) Iniciar sesión en Auth
+      const cred = await signInWithEmailAndPassword(auth, correo.trim(), password);
+      const user = cred.user;
 
-      // 2) Perfil en Firestore (doc por UID)
-      let perfil;
+      // 2) Obtener datos adicionales del perfil en Firestore
       const docRef = doc(db, 'registros', user.uid);
-      const snap = await getDoc(docRef);
+      const docSnap = await getDoc(docRef);
 
-      if (snap.exists()) {
-        perfil = { id: snap.id, ...snap.data() };
-      } else {
-        // Compatibilidad por si ya tienes docs antiguos por correo
-        const q = query(collection(db, 'registros'), where('correo', '==', email.trim()));
-        const qs = await getDocs(q);
-        if (!qs.empty) {
-          const d = qs.docs[0];
-          perfil = { id: d.id, ...d.data() };
-        }
-      }
-
-      if (!perfil) {
-        Swal.fire('Error', 'No se encontró tu perfil en Firestore.', 'error');
+      if (!docSnap.exists()) {
+        Swal.fire('Error', 'No se encontraron datos de usuario en la base de datos.', 'error');
         return;
       }
 
-      // 3) Persistir sesión visible para tu app
-      localStorage.setItem('usuarioActivo', JSON.stringify({
-        uid: perfil.id,
-        nombre: perfil.nombre,
-        apellido: perfil.apellido,
-        email: perfil.correo,
-        telefono: perfil.telefono,
-        master: perfil.esMaster === true,
-      }));
+      const data = docSnap.data();
+
+      const esMaster = data.esMaster === true;
+
+      if (!esMaster) {
+        // Verificar caducidad
+        if (!data.expiracion) {
+          Swal.fire('Error', 'Este usuario no tiene fecha de expiración asignada.', 'error');
+          return;
+        }
+        const fechaExp = new Date(data.expiracion);
+        if (new Date() > fechaExp) {
+          Swal.fire('Acceso caducado', 'Tu acceso ha expirado, contacta con soporte.', 'warning');
+          return;
+        }
+      }
+
+      // 3) Guardar sesión en localStorage
+      localStorage.setItem(
+        'usuarioActivo',
+        JSON.stringify({
+          uid: user.uid,
+          nombre: data.nombre,
+          apellido: data.apellido,
+          telefono: data.telefono,
+          correo: data.correo,
+          master: esMaster
+        })
+      );
+
+      // 4) Mensaje de bienvenida
+      let mensajeTiempo = '';
+      if (!esMaster) {
+        const fechaExp = new Date(data.expiracion);
+        const diffMs = fechaExp - new Date();
+        const dias = Math.ceil(diffMs / (1000 * 60 * 60 * 24));
+        if (dias <= 1) {
+          const horas = Math.ceil(diffMs / (1000 * 60 * 60));
+          mensajeTiempo = `<strong>⚠️ Tu acceso caduca en ${horas} hora(s)</strong>`;
+        } else {
+          mensajeTiempo = `Tu acceso es válido durante <strong>${dias} día(s)</strong> más.`;
+        }
+      } else {
+        mensajeTiempo = `<strong>✅ Tu clave es ilimitada.</strong>`;
+      }
 
       await Swal.fire({
         icon: 'success',
-        title: `Bienvenido, ${perfil.nombre || ''}`.trim(),
-        html: (perfil.esMaster ? '<strong>Acceso como MASTER</strong>' : ''),
-        confirmButtonText: 'Continuar',
+        title: `Bienvenido, ${data.nombre}`,
+        html: `<p>${mensajeTiempo}</p>`,
+        confirmButtonText: 'Continuar'
       });
 
       navigate('/configuracion');
     } catch (error) {
-      console.error('Error al iniciar sesión:', error.code, error.message);
-      Swal.fire('Error al iniciar sesión', error.message, 'error');
+      console.error('Error al iniciar sesión:', error);
+      Swal.fire('Error', error.message, 'error');
     } finally {
       setLoading(false);
     }
@@ -79,59 +97,42 @@ export default function LoginWithEmail() {
 
   return (
     <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-[#fef9f4] to-[#e0e7ff] px-4">
-      <form onSubmit={onSubmit} className="bg-white p-8 rounded-lg shadow-md w-full max-w-md text-center space-y-4">
+      <div className="bg-white p-8 rounded-lg shadow-md w-full max-w-md text-center space-y-4">
         <h2 className="text-2xl font-bold text-[#002c54]">Iniciar sesión</h2>
 
         <input
           type="email"
           placeholder="Correo electrónico"
           className="w-full px-4 py-2 border rounded"
-          value={email}
-          onChange={(e) => setEmail(e.target.value)}
-          required
+          value={correo}
+          onChange={(e) => setCorreo(e.target.value)}
+        />
+        <input
+          type="password"
+          placeholder="Contraseña / Clave"
+          className="w-full px-4 py-2 border rounded"
+          value={password}
+          onChange={(e) => setPassword(e.target.value)}
         />
 
-        <div className="flex items-center justify-between text-sm">
-          <label className="flex items-center gap-2">
-            <input
-              type="checkbox"
-              checked={soyMaster}
-              onChange={(e) => setSoyMaster(e.target.checked)}
-            />
-            Soy master
-          </label>
-          <span className="text-gray-500">
-            {soyMaster ? 'Introduce tu Clave (password de Auth)' : 'Introduce tu Contraseña'}
-          </span>
-        </div>
-
-        <div className="relative">
-          <input
-            type={mostrar ? 'text' : 'password'}
-            placeholder={soyMaster ? 'Clave (master)' : 'Contraseña'}
-            className="w-full px-4 py-2 border rounded pr-10"
-            value={passwordOrClave}
-            onChange={(e) => setPasswordOrClave(e.target.value)}
-            required
-          />
-          <div
-            className="absolute right-2 top-2 cursor-pointer text-gray-500"
-            onClick={() => setMostrar(!mostrar)}
+        <div className="flex justify-center gap-4 mt-4">
+          <button
+            onClick={handleLogin}
+            disabled={loading}
+            className="flex-1 max-w-[160px] bg-[#002c54] text-white px-6 py-2 rounded hover:bg-[#004080] transition disabled:opacity-60"
           >
-            {mostrar ? <EyeOff size={20} /> : <Eye size={20} />}
-          </div>
+            {loading ? 'Entrando…' : 'Iniciar sesión'}
+          </button>
+          <button
+            onClick={() => navigate('/')}
+            className="flex-1 max-w-[160px] bg-gray-200 text-[#002c54] px-6 py-2 rounded hover:bg-gray-300 transition"
+          >
+            Volver
+          </button>
         </div>
-
-        <button
-          type="submit"
-          disabled={loading}
-          className="w-full bg-[#002c54] text-white px-6 py-2 rounded hover:bg-[#004080] transition disabled:opacity-60"
-        >
-          {loading ? 'Entrando…' : 'Iniciar sesión'}
-        </button>
 
         <p className="text-sm text-gray-500">
-          ¿No tienes cuenta?{' '}
+          ¿No tienes una cuenta?{' '}
           <span
             onClick={() => navigate('/registro')}
             className="text-blue-600 hover:underline cursor-pointer"
@@ -139,10 +140,12 @@ export default function LoginWithEmail() {
             Regístrate aquí
           </span>
         </p>
-      </form>
+      </div>
     </div>
   );
 }
+
+
 
 
 

@@ -1,26 +1,25 @@
 // src/firebaseConfig.js
+// Asegúrate de definir estas variables en tu entorno de build (Vite):
+// VITE_FIREBASE_API_KEY, VITE_FIREBASE_AUTH_DOMAIN, VITE_FIREBASE_PROJECT_ID,
+// VITE_FIREBASE_STORAGE_BUCKET, VITE_FIREBASE_MESSAGING_SENDER_ID, VITE_FIREBASE_APP_ID
+
 import { initializeApp } from 'firebase/app';
-import { getFirestore } from 'firebase/firestore';
 import { getAuth } from 'firebase/auth';
-// (Opcional) import { getAnalytics } from 'firebase/analytics';
+import { getFirestore } from 'firebase/firestore';
 
 const firebaseConfig = {
-  apiKey: "AIzaSyCKyFJ8C5VPY77r8FURuojEN6hd_x9CQyY",
-  authDomain: "horascamping2025.firebaseapp.com",
-  projectId: "horascamping2025",
-  storageBucket: "horascamping2025.appspot.com", // <- REVISADO, antes tenía .app en lugar de .appspot.com
-  messagingSenderId: "86910353141",
-  appId: "1:86910353141:web:aceb6eed619658494b4fbc",
-  measurementId: "G-RP8911LRTE"
+  apiKey: import.meta.env.VITE_FIREBASE_API_KEY,
+  authDomain: import.meta.env.VITE_FIREBASE_AUTH_DOMAIN,
+  projectId: import.meta.env.VITE_FIREBASE_PROJECT_ID,
+  storageBucket: import.meta.env.VITE_FIREBASE_STORAGE_BUCKET,
+  messagingSenderId: import.meta.env.VITE_FIREBASE_MESSAGING_SENDER_ID,
+  appId: import.meta.env.VITE_FIREBASE_APP_ID,
 };
 
 const app = initializeApp(firebaseConfig);
-
-// Exportaciones con nombre (recomendadas)
-export const db = getFirestore(app);
 export const auth = getAuth(app);
-// export const analytics = getAnalytics(app); // si lo usas
+export const db = getFirestore(app);
 
-// ✅ Exportación por defecto para compatibilidad con archivos antiguos
-export default db;
+export default app;
+
 

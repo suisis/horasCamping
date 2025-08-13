@@ -2,8 +2,10 @@
 import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import Swal from 'sweetalert2';
-import db from '../firebaseConfig';
 import { doc, setDoc, serverTimestamp } from 'firebase/firestore';
+import { createUserWithEmailAndPassword } from 'firebase/auth';
+import { auth, db } from '../firebaseConfig';
+import { Eye, EyeOff } from 'lucide-react';
 
 export default function Registro() {
   const [formData, setFormData] = useState({
@@ -11,63 +13,92 @@ export default function Registro() {
     apellido: '',
     telefono: '',
     correo: '',
-    clave: '' // solo se usará si es master
+    password: '', // para usuarios NO master
+    clave: ''     // para master (se usará como password en Auth)
   });
+
+  const [mostrarPass, setMostrarPass] = useState(false);
+  const [mostrarClave, setMostrarClave] = useState(false);
+  const [loading, setLoading] = useState(false);
 
   const navigate = useNavigate();
 
   const handleChange = (e) => {
-    setFormData({ ...formData, [e.target.name]: e.target.value });
+    setFormData(prev => ({ ...prev, [e.target.name]: e.target.value }));
   };
 
-  const esMaster = formData.telefono === '635480407'; // Cambia este número por el del master
-
-  const generarClave = () => {
-    const caracteres = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
-    let clave = '';
-    for (let i = 0; i < 6; i++) {
-      clave += caracteres.charAt(Math.floor(Math.random() * caracteres.length));
-    }
-    return clave;
-  };
+  // Cambia este número por el del master
+  const esMaster = formData.telefono.trim() === '635480407';
 
   const handleSubmit = async (e) => {
     e.preventDefault();
 
-    const claveFinal = esMaster ? formData.clave : generarClave();
+    const { nombre, apellido, telefono, correo, password, clave } = formData;
 
-    if (esMaster && !claveFinal) {
-      Swal.fire('Error', 'Debes escribir una clave para el usuario master', 'error');
+    if (!nombre || !apellido || !telefono || !correo) {
+      Swal.fire('Error', 'Todos los campos (nombre, apellido, teléfono, correo) son obligatorios.', 'error');
       return;
     }
 
+    // Para master, exigimos "clave"; para no master, exigimos "password"
+    if (esMaster && !clave) {
+      Swal.fire('Error', 'Debes escribir una CLAVE para el usuario master.', 'error');
+      return;
+    }
+    if (!esMaster && !password) {
+      Swal.fire('Error', 'Debes escribir una CONTRASEÑA.', 'error');
+      return;
+    }
+
+    setLoading(true);
     try {
-      await setDoc(doc(db, 'registros', `${formData.telefono}_${formData.apellido}`), {
-        ...formData,
-        clave: claveFinal,
-        primerAcceso: null,
-        expiracion: null,
+      // 1) Crear usuario en Auth
+      const passFinal = esMaster ? clave : password;
+      const cred = await createUserWithEmailAndPassword(auth, correo.trim(), passFinal);
+      const user = cred.user;
+
+      // 2) Calcular expiración
+      let primerAcceso = new Date().toISOString();
+      let expiracion = null; // ilimitada para master
+      if (!esMaster) {
+        const ahora = new Date();
+        const exp = new Date(ahora);
+        exp.setDate(exp.getDate() + 3);
+        expiracion = exp.toISOString();
+      }
+
+      // 3) Guardar perfil en Firestore (registros/{uid})
+      await setDoc(doc(db, 'registros', user.uid), {
+        uid: user.uid,
+        nombre,
+        apellido,
+        telefono,
+        correo: correo.trim(),
+        esMaster,
+        // Campos de compatibilidad con tu lógica anterior
+        clave: esMaster ? passFinal : '', // no se usará en client, pero lo dejamos por compatibilidad
+        primerAcceso,
+        expiracion,                       // null si master (ilimitado)
         creadoEn: serverTimestamp(),
-        master: esMaster // útil para validaciones futuras
       });
 
-      Swal.fire({
+      await Swal.fire({
         icon: 'success',
         title: 'Registro exitoso',
-        html: `
-          <p><strong>Tu clave es: <span style="font-size: 1.2em;">${claveFinal}</span></strong></p>
-          ${
-            esMaster
-              ? `<p>✅ Esta clave no caduca.</p>`
-              : `<p>⚠️ Esta clave dura 3 días <u>desde tu primer inicio de sesión</u>.</p>
-                 <p>Guárdala bien. No podrás volver a verla.</p>`
-          }
-        `,
+        html: esMaster
+          ? `<p>✅ Registro como <strong>MASTER</strong> completado.</p>
+              <p>Tu <strong>Clave</strong> será tu contraseña de acceso.</p>`
+          : `<p>✅ Registro completado.</p>
+              <p>Ahora puedes iniciar sesión con tu correo y contraseña.</p>`,
         confirmButtonText: 'Ir a iniciar sesión'
-      }).then(() => navigate('/login'));
+      });
+
+      navigate('/login');
     } catch (error) {
-      console.error('Error al registrar:', error);
-      Swal.fire('Error', 'No se pudo registrar. Intenta de nuevo.', 'error');
+      console.error('Error al registrar:', error.code, error.message);
+      Swal.fire('Error', error.message, 'error');
+    } finally {
+      setLoading(false);
     }
   };
 
@@ -78,30 +109,96 @@ export default function Registro() {
         className="bg-white/90 backdrop-blur-md p-8 rounded-lg shadow-lg w-full max-w-md space-y-4"
       >
         <h2 className="text-2xl font-bold text-center text-[#002c54]">Registro</h2>
-        <input name="nombre" type="text" placeholder="Nombre" value={formData.nombre} onChange={handleChange} className="w-full p-2 border rounded" required />
-        <input name="apellido" type="text" placeholder="Apellido" value={formData.apellido} onChange={handleChange} className="w-full p-2 border rounded" required />
-        <input name="telefono" type="tel" placeholder="Número de teléfono" value={formData.telefono} onChange={handleChange} className="w-full p-2 border rounded" required />
-        <input name="correo" type="email" placeholder="Correo electrónico" value={formData.correo} onChange={handleChange} className="w-full p-2 border rounded" required />
 
-        {/* Mostrar campo de clave solo si es el teléfono del master */}
-        {esMaster && (
-          <input
-            name="clave"
-            type="text"
-            placeholder="Clave para el usuario master"
-            value={formData.clave}
-            onChange={handleChange}
-            className="w-full p-2 border rounded"
-            required
-          />
+        <input
+          name="nombre"
+          type="text"
+          placeholder="Nombre"
+          value={formData.nombre}
+          onChange={handleChange}
+          className="w-full p-2 border rounded"
+          required
+        />
+
+        <input
+          name="apellido"
+          type="text"
+          placeholder="Apellido"
+          value={formData.apellido}
+          onChange={handleChange}
+          className="w-full p-2 border rounded"
+          required
+        />
+
+        <input
+          name="telefono"
+          type="tel"
+          placeholder="Número de teléfono"
+          value={formData.telefono}
+          onChange={handleChange}
+          className="w-full p-2 border rounded"
+          required
+        />
+
+        <input
+          name="correo"
+          type="email"
+          placeholder="Correo electrónico"
+          value={formData.correo}
+          onChange={handleChange}
+          className="w-full p-2 border rounded"
+          required
+        />
+
+        {/* Si es master, pedimos CLAVE (será su password en Auth).
+            Si no es master, pedimos CONTRASEÑA normal. */}
+        {esMaster ? (
+          <div className="relative">
+            <input
+              name="clave"
+              type={mostrarClave ? 'text' : 'password'}
+              placeholder="Clave (master)"
+              value={formData.clave}
+              onChange={handleChange}
+              className="w-full p-2 border rounded pr-10"
+              required
+            />
+            <div
+              className="absolute inset-y-0 right-3 flex items-center cursor-pointer text-gray-500"
+              onClick={() => setMostrarClave(!mostrarClave)}
+              title={mostrarClave ? 'Ocultar' : 'Mostrar'}
+            >
+              {mostrarClave ? <EyeOff size={20} /> : <Eye size={20} />}
+            </div>
+          </div>
+        ) : (
+          <div className="relative">
+            <input
+              name="password"
+              type={mostrarPass ? 'text' : 'password'}
+              placeholder="Contraseña"
+              value={formData.password}
+              onChange={handleChange}
+              className="w-full p-2 border rounded pr-10"
+              required
+            />
+            <div
+              className="absolute inset-y-0 right-3 flex items-center cursor-pointer text-gray-500"
+              onClick={() => setMostrarPass(!mostrarPass)}
+              title={mostrarPass ? 'Ocultar' : 'Mostrar'}
+            >
+              {mostrarPass ? <EyeOff size={20} /> : <Eye size={20} />}
+            </div>
+          </div>
         )}
 
         <div className="flex justify-center gap-4 mt-4">
           <button
             type="submit"
-            className="flex-1 max-w-[160px] bg-[#002c54] text-white px-6 py-2 rounded hover:bg-[#004080] transition"
+            disabled={loading}
+            className="flex-1 max-w-[160px] bg-[#002c54] text-white px-6 py-2 rounded hover:bg-[#004080] transition disabled:opacity-60"
           >
-            Registrarse
+            {loading ? 'Registrando…' : 'Registrarse'}
           </button>
           <button
             type="button"
@@ -115,6 +212,7 @@ export default function Registro() {
     </div>
   );
 }
+
 
 
 
