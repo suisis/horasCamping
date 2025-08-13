@@ -3,7 +3,11 @@ import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import Swal from 'sweetalert2';
 import { signInWithEmailAndPassword } from 'firebase/auth';
-import { doc, getDoc } from 'firebase/firestore';
+import {
+  doc, getDoc, setDoc,
+  query, where, collection, getDocs,
+  serverTimestamp,
+} from 'firebase/firestore';
 import { auth, db } from '../firebaseConfig';
 
 export default function LoginWithEmail() {
@@ -20,76 +24,113 @@ export default function LoginWithEmail() {
 
     setLoading(true);
     try {
-      // 1) Iniciar sesión en Auth
+      // 1) Auth
       const cred = await signInWithEmailAndPassword(auth, correo.trim(), password);
-      const user = cred.user;
+      const user = cred.user; // <-- aquí tienes el uid correcto
 
-      // 2) Obtener datos adicionales del perfil en Firestore
-      const docRef = doc(db, 'registros', user.uid);
-      const docSnap = await getDoc(docRef);
+      // 2) Intentar leer perfil en registros/{uid}
+      let perfil;
+      const refUid = doc(db, 'registros', user.uid);
+      const snapUid = await getDoc(refUid);
 
-      if (!docSnap.exists()) {
-        Swal.fire('Error', 'No se encontraron datos de usuario en la base de datos.', 'error');
-        return;
-      }
-
-      const data = docSnap.data();
-
-      const esMaster = data.esMaster === true;
-
-      if (!esMaster) {
-        // Verificar caducidad
-        if (!data.expiracion) {
-          Swal.fire('Error', 'Este usuario no tiene fecha de expiración asignada.', 'error');
-          return;
-        }
-        const fechaExp = new Date(data.expiracion);
-        if (new Date() > fechaExp) {
-          Swal.fire('Acceso caducado', 'Tu acceso ha expirado, contacta con soporte.', 'warning');
-          return;
-        }
-      }
-
-      // 3) Guardar sesión en localStorage
-      localStorage.setItem(
-        'usuarioActivo',
-        JSON.stringify({
-          uid: user.uid,
-          nombre: data.nombre,
-          apellido: data.apellido,
-          telefono: data.telefono,
-          correo: data.correo,
-          master: esMaster
-        })
-      );
-
-      // 4) Mensaje de bienvenida
-      let mensajeTiempo = '';
-      if (!esMaster) {
-        const fechaExp = new Date(data.expiracion);
-        const diffMs = fechaExp - new Date();
-        const dias = Math.ceil(diffMs / (1000 * 60 * 60 * 24));
-        if (dias <= 1) {
-          const horas = Math.ceil(diffMs / (1000 * 60 * 60));
-          mensajeTiempo = `<strong>⚠️ Tu acceso caduca en ${horas} hora(s)</strong>`;
-        } else {
-          mensajeTiempo = `Tu acceso es válido durante <strong>${dias} día(s)</strong> más.`;
-        }
+      if (snapUid.exists()) {
+        perfil = { id: snapUid.id, ...snapUid.data() };
       } else {
-        mensajeTiempo = `<strong>✅ Tu clave es ilimitada.</strong>`;
+        // 3) Buscar documento "antiguo" por correo
+        const q = query(collection(db, 'registros'), where('correo', '==', user.email));
+        const qs = await getDocs(q);
+
+        if (!qs.empty) {
+          const oldDoc = qs.docs[0];
+          const oldData = oldDoc.data();
+
+          // 3.a) Migrar a registros/{uid} si el id es distinto
+          const dataNormalizada = {
+            uid: user.uid,
+            nombre: oldData.nombre || '',
+            apellido: oldData.apellido || '',
+            telefono: oldData.telefono || '',
+            correo: user.email,
+            esMaster: oldData.esMaster === true || oldData.master === true || false,
+            // compatibilidad
+            clave: '',
+            // fechas (si ya había las respetamos)
+            primerAcceso: oldData.primerAcceso || new Date().toISOString(),
+            expiracion: (oldData.esMaster === true || oldData.master === true) ? null : (oldData.expiracion || null),
+            creadoEn: oldData.creadoEn || serverTimestamp(),
+          };
+
+          await setDoc(refUid, dataNormalizada, { merge: true });
+          // (Opcional) podrías borrar el doc antiguo aquí si quieres, yo lo dejo por si acaso
+          perfil = { id: user.uid, ...dataNormalizada };
+        } else {
+          // 4) No hay perfil en ningún lado → crear uno mínimo
+          const esMasterPorCorreo = false; // si quieres, mete aquí un whitelist por email
+          const ahora = new Date();
+          const exp = new Date(ahora);
+          exp.setDate(exp.getDate() + 3);
+
+          const nuevo = {
+            uid: user.uid,
+            nombre: '',
+            apellido: '',
+            telefono: '',
+            correo: user.email,
+            esMaster: esMasterPorCorreo,
+            clave: '',
+            primerAcceso: ahora.toISOString(),
+            expiracion: esMasterPorCorreo ? null : exp.toISOString(),
+            creadoEn: serverTimestamp(),
+          };
+
+          await setDoc(refUid, nuevo, { merge: true });
+          perfil = { id: user.uid, ...nuevo };
+        }
+      }
+
+      // 5) Guardar sesión “visible” y continuar
+      localStorage.setItem('usuarioActivo', JSON.stringify({
+        uid: perfil.id,
+        nombre: perfil.nombre,
+        apellido: perfil.apellido,
+        telefono: perfil.telefono,
+        correo: perfil.correo,
+        master: perfil.esMaster === true,
+      }));
+
+      // Mensaje de bienvenida (con caducidad si no es master)
+      let html = '';
+      if (perfil.esMaster) {
+        html = '<strong>✅ Acceso MASTER (ilimitado)</strong>';
+      } else if (perfil.expiracion) {
+        const fechaExp = new Date(perfil.expiracion);
+        const diff = fechaExp - new Date();
+        if (diff <= 24 * 60 * 60 * 1000) {
+          const horas = Math.ceil(diff / (1000 * 60 * 60));
+          html = `<strong>⚠️ Tu acceso caduca en ${horas} hora(s)</strong>`;
+        } else {
+          const dias = Math.ceil(diff / (1000 * 60 * 60 * 24));
+          html = `Tu acceso es válido durante <strong>${dias} día(s)</strong> más.`;
+        }
       }
 
       await Swal.fire({
         icon: 'success',
-        title: `Bienvenido, ${data.nombre}`,
-        html: `<p>${mensajeTiempo}</p>`,
-        confirmButtonText: 'Continuar'
+        title: `Bienvenido, ${perfil.nombre || ''}`.trim() || 'Bienvenido',
+        html,
+        confirmButtonText: 'Continuar',
       });
 
       navigate('/configuracion');
     } catch (error) {
-      console.error('Error al iniciar sesión:', error);
-      Swal.fire('Error', error.message, 'error');
+      console.error('Error al iniciar sesión:', error.code, error.message);
+      if (error.code === 'auth/invalid-credential' || error.code === 'auth/wrong-password') {
+        Swal.fire('Credenciales inválidas', 'La contraseña no coincide o la cuenta no existe en Auth. Si eres MASTER, asegúrate de que tu contraseña tenga al menos 6 caracteres.', 'error');
+      } else if (error.code === 'auth/user-not-found') {
+        Swal.fire('Usuario no encontrado', 'No existe cuenta con ese correo. Regístrate o revisa el email.', 'error');
+      } else {
+        Swal.fire('Error al iniciar sesión', error.message, 'error');
+      }
     } finally {
       setLoading(false);
     }
@@ -144,6 +185,7 @@ export default function LoginWithEmail() {
     </div>
   );
 }
+
 
 
 
